@@ -58,7 +58,7 @@ def is_story_link(url: str) -> bool:
     return "/stories/" in url
 
 
-async def download_post_with_instaloader(url: str, out_dir: Path) -> list[Path]:
+async def download_post_with_instaloader(url: str, out_dir: Path) -> list[dict]:
     """Качає Instagram пост / рілс / каруселю через instaloader, зі збереженням порядку."""
     import instaloader
 
@@ -74,7 +74,7 @@ async def download_post_with_instaloader(url: str, out_dir: Path) -> list[Path]:
     # для одиночного поста/рілса — просто сам пост
     nodes = list(post.get_sidecar_nodes()) if post.typename == "GraphSidecar" else [post]
 
-    files: list[Path] = []
+    files: list[dict] = []
     for i, node in enumerate(nodes, start=1):
         is_video = getattr(node, "is_video", False)
         if is_video:
@@ -87,10 +87,12 @@ async def download_post_with_instaloader(url: str, out_dir: Path) -> list[Path]:
         if not media_url:
             continue
 
+        dims = getattr(node, "dimensions", None) or {}
+
         dest = out_dir / f"{i:02d}.{ext}"
         response = L.context.get_raw(media_url)
         dest.write_bytes(response.content)
-        files.append(dest)
+        files.append({"path": dest, "width": dims.get("width"), "height": dims.get("height")})
 
     return files
 
@@ -133,10 +135,13 @@ async def download_story_with_instaloader(url: str, out_dir: Path) -> list[Path]
         for item in story.get_items():
             L.download_storyitem(item, target=str(out_dir))
 
-    return sorted(out_dir.glob("*"))
+    files: list[dict] = []
+    for path in sorted(out_dir.glob("*")):
+        files.append({"path": path, "width": None, "height": None})
+    return files
 
 
-async def download_video_with_ytdlp(url: str, out_dir: Path) -> list[Path]:
+async def download_video_with_ytdlp(url: str, out_dir: Path) -> list[dict]:
     """Качає YouTube / TikTok відео, до 4K, з автоматичним об'єднанням відео+звук."""
     ydl_opts = {
         "outtmpl": str(out_dir / "%(id)s.%(ext)s"),
@@ -147,9 +152,15 @@ async def download_video_with_ytdlp(url: str, out_dir: Path) -> list[Path]:
         "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url, download=True)
 
-    return sorted(out_dir.glob("*"))
+    width = info.get("width")
+    height = info.get("height")
+
+    files: list[dict] = []
+    for path in sorted(out_dir.glob("*")):
+        files.append({"path": path, "width": width, "height": height})
+    return files
 
 
 def split_evenly(items: list, max_chunk: int = 10) -> list[list]:
@@ -202,7 +213,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             else:  # youtube або tiktok
                 files = await download_video_with_ytdlp(url, out_dir)
 
-            media_files = [f for f in files if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".mp4", ".webp", ".mov")]
+            media_files = [f for f in files if f["path"].suffix.lower() in (".jpg", ".jpeg", ".png", ".mp4", ".webp", ".mov")]
 
             if not media_files:
                 await status_msg.edit_text("нічого не знайшов за цим посиланням — можливо контент приватний або видалений")
@@ -213,17 +224,29 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             for chunk in split_evenly(media_files, max_chunk=10):
                 if len(chunk) == 1:
                     f = chunk[0]
-                    if f.suffix.lower() in (".mp4", ".mov"):
-                        await update.message.reply_video(video=f.open("rb"))
+                    if f["path"].suffix.lower() in (".mp4", ".mov"):
+                        await update.message.reply_video(
+                            video=f["path"].open("rb"),
+                            width=f["width"],
+                            height=f["height"],
+                            supports_streaming=True,
+                        )
                     else:
-                        await update.message.reply_photo(photo=f.open("rb"))
+                        await update.message.reply_photo(photo=f["path"].open("rb"))
                 else:
                     media_group = []
                     for f in chunk:
-                        if f.suffix.lower() in (".mp4", ".mov"):
-                            media_group.append(InputMediaVideo(media=f.open("rb")))
+                        if f["path"].suffix.lower() in (".mp4", ".mov"):
+                            media_group.append(
+                                InputMediaVideo(
+                                    media=f["path"].open("rb"),
+                                    width=f["width"],
+                                    height=f["height"],
+                                    supports_streaming=True,
+                                )
+                            )
                         else:
-                            media_group.append(InputMediaPhoto(media=f.open("rb")))
+                            media_group.append(InputMediaPhoto(media=f["path"].open("rb")))
                     await update.message.reply_media_group(media=media_group)
 
             # прибираємо все, що накопичилось по цьому лінку: і поточне
