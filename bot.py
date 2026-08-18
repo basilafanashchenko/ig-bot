@@ -30,6 +30,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("ig-bot")
 
+# запам'ятовуємо всі повідомлення (лінк + статуси невдалих спроб) по кожному
+# посиланню в кожному чаті, щоб при успіху прибрати геть усе одним махом
+_pending_cleanup: dict[tuple[int, str], list[int]] = {}
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 IG_USERNAME = os.environ.get("IG_USERNAME")  # потрібен лише для сторіз
 IG_PASSWORD = os.environ.get("IG_PASSWORD")
@@ -182,6 +186,11 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO)
     status_msg = await update.message.reply_text("качаю, секунду...")
 
+    cleanup_key = (update.effective_chat.id, url)
+    pending = _pending_cleanup.setdefault(cleanup_key, [])
+    pending.append(update.message.message_id)
+    pending.append(status_msg.message_id)
+
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp)
         try:
@@ -217,14 +226,14 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                             media_group.append(InputMediaPhoto(media=f.open("rb")))
                     await update.message.reply_media_group(media=media_group)
 
-            await status_msg.delete()
-
-            # прибираємо повідомлення з лінком, лишаючи тільки готовий контент
+            # прибираємо все, що накопичилось по цьому лінку: і поточне
+            # повідомлення, і попередні невдалі спроби, якщо вони були
             # (працює в групах лише якщо бот доданий як адміністратор)
-            try:
-                await update.message.delete()
-            except Exception:
-                pass  # немає прав адміна — просто лишаємо повідомлення як є
+            for message_id in _pending_cleanup.pop(cleanup_key, []):
+                try:
+                    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=message_id)
+                except Exception:
+                    pass  # немає прав адміна або повідомлення вже видалене — просто пропускаємо
 
         except Exception as e:
             log.exception("Помилка завантаження")
