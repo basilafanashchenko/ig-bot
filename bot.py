@@ -49,7 +49,6 @@ async def download_with_ytdlp(url: str, out_dir: Path) -> list[Path]:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": False,  # карусель = плейлист із кількох елементів
-        "format": "bestvideo+bestaudio/best/best",
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
