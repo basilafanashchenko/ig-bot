@@ -10,6 +10,7 @@ Telegram-бот для завантаження контенту з Instagram, Y
 
 import os
 import re
+import math
 import logging
 import tempfile
 import threading
@@ -147,6 +148,26 @@ async def download_video_with_ytdlp(url: str, out_dir: Path) -> list[Path]:
     return sorted(out_dir.glob("*"))
 
 
+def split_evenly(items: list, max_chunk: int = 10) -> list[list]:
+    """Ділить список на групи не більше max_chunk, розподіляючи порівну,
+    а не просто відрізаючи по max_chunk із залишком в кінці."""
+    n = len(items)
+    if n <= max_chunk:
+        return [items]
+
+    num_groups = math.ceil(n / max_chunk)
+    base_size = n // num_groups
+    remainder = n % num_groups
+
+    groups = []
+    idx = 0
+    for i in range(num_groups):
+        size = base_size + (1 if i < remainder else 0)
+        groups.append(items[idx : idx + size])
+        idx += size
+    return groups
+
+
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text or ""
     match = LINK_RE.search(text)
@@ -178,9 +199,9 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await status_msg.edit_text("нічого не знайшов за цим посиланням — можливо контент приватний або видалений")
                 return
 
-            # телеграм дозволяє максимум 10 елементів в одній media group
-            for i in range(0, len(media_files), 10):
-                chunk = media_files[i : i + 10]
+            # телеграм дозволяє максимум 10 елементів в одній media group —
+            # ділимо порівну, а не відрізаємо по 10 із залишком в кінці
+            for chunk in split_evenly(media_files, max_chunk=10):
                 if len(chunk) == 1:
                     f = chunk[0]
                     if f.suffix.lower() in (".mp4", ".mov"):
