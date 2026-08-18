@@ -54,7 +54,7 @@ def is_story_link(url: str) -> bool:
 
 
 async def download_post_with_instaloader(url: str, out_dir: Path) -> list[Path]:
-    """Качає Instagram пост / рілс / каруселю через instaloader."""
+    """Качає Instagram пост / рілс / каруселю через instaloader, зі збереженням порядку."""
     import instaloader
 
     match = re.search(r"/(?:p|reel|reels|tv)/([A-Za-z0-9_\-]+)", url)
@@ -62,21 +62,32 @@ async def download_post_with_instaloader(url: str, out_dir: Path) -> list[Path]:
         raise RuntimeError("Не вдалося розпізнати посилання на пост чи рілс.")
     shortcode = match.group(1)
 
-    L = instaloader.Instaloader(
-        dirname_pattern=str(out_dir),
-        filename_pattern="{shortcode}_{typename}",
-        download_video_thumbnails=False,
-        download_geotags=False,
-        download_comments=False,
-        save_metadata=False,
-        post_metadata_txt_pattern="",
-        quiet=True,
-    )
-
+    L = instaloader.Instaloader(quiet=True)
     post = instaloader.Post.from_shortcode(L.context, shortcode)
-    L.download_post(post, target=str(out_dir))
 
-    return sorted(out_dir.glob("*"))
+    # для каруселі беремо кожен елемент по черзі в оригінальному порядку,
+    # для одиночного поста/рілса — просто сам пост
+    nodes = list(post.get_sidecar_nodes()) if post.typename == "GraphSidecar" else [post]
+
+    files: list[Path] = []
+    for i, node in enumerate(nodes, start=1):
+        is_video = getattr(node, "is_video", False)
+        if is_video:
+            media_url = getattr(node, "video_url", None)
+            ext = "mp4"
+        else:
+            media_url = getattr(node, "display_url", None) or getattr(node, "url", None)
+            ext = "jpg"
+
+        if not media_url:
+            continue
+
+        dest = out_dir / f"{i:02d}.{ext}"
+        response = L.context.get_raw(media_url)
+        dest.write_bytes(response.content)
+        files.append(dest)
+
+    return files
 
 
 async def download_story_with_instaloader(url: str, out_dir: Path) -> list[Path]:
