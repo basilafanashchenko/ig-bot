@@ -12,6 +12,8 @@ import re
 import shutil
 import logging
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from telegram import Update, InputMediaPhoto, InputMediaVideo
@@ -151,7 +153,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+class _HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format, *args):
+        pass  # не смітимо логи запитами перевірки живості
+
+
+def _run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), _HealthCheckHandler)
+    server.serve_forever()
+
+
 def main() -> None:
+    # Render (Web Service) вимагає, щоб додаток слухав якийсь порт —
+    # це не впливає на роботу бота, просто "заглушка" для перевірки живості
+    threading.Thread(target=_run_health_server, daemon=True).start()
+
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
